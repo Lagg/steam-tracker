@@ -33,6 +33,9 @@ tracker_dir = "/home/anthony/NEW_SCHEMA_DOWNLOADER/TEST_DIR/"
 # GIT_DIR is the location of the actual git repository
 tracker_git_dir = os.path.join(tracker_dir, ".git")
 
+# URL to push to, set to None or empty if you don't want this
+tracker_push_url = "file:///home/anthony/NEW_SCHEMA_DOWNLOADER/test_bare.git"
+
 # Change to the location of your git install's binary (probably not needed)
 git_binary = "/usr/bin/git"
 
@@ -129,6 +132,10 @@ while True:
         # Commit all (just to make sure)
         subprocess.Popen([git_binary, 'commit', '-a', '-m', summary_top + "\n\n" + summary_body + "\n"],
                          env = git_env, cwd = tracker_dir).wait()
+        # Poosh leetle tracker tree (if push URL is set)
+        if tracker_push_url:
+            subprocess.Popen([git_binary, 'push', '--mirror', tracker_push_url],
+                             env = git_env, cwd = tracker_dir).wait()
     else:
         sys.stderr.write("Nothing changed\n")
 
