@@ -33,6 +33,14 @@ tracker_dir = "/home/anthony/NEW_SCHEMA_DOWNLOADER/TEST_DIR/"
 # GIT_DIR is the location of the actual git repository
 tracker_git_dir = os.path.join(tracker_dir, ".git")
 
+# Change to the location of your git install's binary (probably not needed)
+git_binary = "/usr/bin/git"
+
+# Name to commit with
+git_name = "TF Wiki"
+# Email (will show up in log, set this to something non-existent unless you like spam)
+git_email = "noreply@wiki.teamfortress.com"
+
 # End configuration
 
 def process_schema_request(label, request):
@@ -107,5 +115,15 @@ for k, v in commit_summary.items():
     summary_body += "{0}: {1}\n\n".format(k, v)
 if summary_top:
     sys.stderr.write("{0}\n\n{1}\n".format(summary_top, summary_body))
+
+    git_env = {"GIT_DIR": tracker_git_dir, "GIT_WORKING_TREE": tracker_dir,
+               "GIT_AUTHOR_EMAIL": git_email, "GIT_AUTHOR_NAME": git_name,
+               "GIT_COMMITTER_EMAIL": git_email, "GIT_COMMITTER_NAME": git_name}
+
+    # Add all working tree files
+    subprocess.Popen([git_binary, 'add', '-A'], env = git_env, cwd = tracker_dir).wait()
+    # Commit all (just to make sure)
+    subprocess.Popen([git_binary, 'commit', '-a', '-m', summary_top + "\n\n" + summary_body + "\n"],
+                     env = git_env, cwd = tracker_dir).wait()
 else:
     sys.stderr.write("Nothing changed\n")
