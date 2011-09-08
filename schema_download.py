@@ -53,10 +53,11 @@ def process_schema_request(label, request):
     except urllib2.HTTPError as err:
         if err.getcode() == 304:
             sys.stderr.write("\x1b[31;1mNo\x1b[0m\n")
-            return None
+        return None
 
     return response, schema
-    
+
+commit_summary = {}
 for k,v in games.iteritems():
     sys.stderr.write("Starting {0} ({1})\n------------\n".format(k, v))
 
@@ -69,8 +70,8 @@ for k,v in games.iteritems():
     req_headers = {}
     clientreq_headers = {}
     schemadict = None
-    schema_lm = "N/A"
-    client_schema_lm = "N/A"
+    schema_lm = ""
+    client_schema_lm = ""
 
     if os.path.exists(schema_path):
         req_headers["If-Modified-Since"] = email.utils.formatdate(os.stat(schema_path).st_mtime, usegmt=True)
@@ -93,5 +94,18 @@ for k,v in games.iteritems():
         if res:
             client_schema_lm = res[0].headers.get("last-modified", "Missing LM")
 
-    sys.stderr.write("\nAPI: {0} - Client: {1}\n".format(schema_lm, client_schema_lm))
+    if schema_lm: commit_summary[schema_base_name] = schema_lm
+    if client_schema_lm: commit_summary[client_schema_base_name] = client_schema_lm
+
+    sys.stderr.write("\nAPI: {0} - Client: {1}\n".format(schema_lm or "No change", client_schema_lm or "No change"))
     sys.stderr.write("\n\n")
+
+sys.stderr.write("Committing changes\n------------\n")
+summary_top = ", ".join(commit_summary.keys())
+summary_body = ""
+for k, v in commit_summary.items():
+    summary_body += "{0}: {1}\n\n".format(k, v)
+if summary_top:
+    sys.stderr.write("{0}\n\n{1}\n".format(summary_top, summary_body))
+else:
+    sys.stderr.write("Nothing changed\n")
