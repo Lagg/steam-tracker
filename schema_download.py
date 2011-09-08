@@ -128,13 +128,13 @@ while True:
                    "GIT_COMMITTER_EMAIL": git_email, "GIT_COMMITTER_NAME": git_name}
 
         # Add all working tree files
-        subprocess.Popen([git_binary, 'add', '-A'], env = git_env, cwd = tracker_dir).wait()
+        subprocess.Popen([git_binary, "add", "-A"], env = git_env, cwd = tracker_dir).wait()
         # Commit all (just to make sure)
-        subprocess.Popen([git_binary, 'commit', '-a', '-m', summary_top + "\n\n" + summary_body + "\n"],
+        subprocess.Popen([git_binary, "commit", "-a", "-m", summary_top + "\n\n" + summary_body + "\n"],
                          env = git_env, cwd = tracker_dir).wait()
         # Poosh leetle tracker tree (if push URL is set)
         if tracker_push_url:
-            subprocess.Popen([git_binary, 'push', '--mirror', tracker_push_url],
+            subprocess.Popen([git_binary, "push", "--mirror", tracker_push_url],
                              env = git_env, cwd = tracker_dir).wait()
     else:
         sys.stderr.write("Nothing changed\n")
