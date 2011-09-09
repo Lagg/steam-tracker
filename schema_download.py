@@ -99,7 +99,7 @@ while True:
         if res:
             schema_lm = res[0].headers.get("last-modified", "Missing LM")
             schemadict = json.loads(res[1])
-        else:
+        elif os.path.exists(schema_path):
             schemadict = json.load(open(schema_path, "r"))
 
         if schemadict:
