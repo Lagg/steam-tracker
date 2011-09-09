@@ -14,7 +14,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
-import json, urllib2, socket, email.utils, os, sys, subprocess, time
+import json, urllib2, socket, email.utils, os, sys, subprocess, time, logging
 socket.timeout(1)
 
 # Configuration
@@ -28,13 +28,13 @@ games = {"Portal 2": 620,
          }
 
 # GIT_WORKING_TREE is where the files are
-tracker_dir = "/home/anthony/NEW_SCHEMA_DOWNLOADER/TEST_DIR/"
+tracker_dir = os.path.join(os.getcwd(), "schema-tracking/")
 
 # GIT_DIR is the location of the actual git repository
 tracker_git_dir = os.path.join(tracker_dir, ".git")
 
 # URL to push to, set to None or empty if you don't want this
-tracker_push_url = "file:///home/anthony/NEW_SCHEMA_DOWNLOADER/test_bare.git"
+tracker_push_url = os.path.join(os.getcwd(), "schema-tracking-bare.git")
 
 # Change to the location of your git install's binary (probably not needed)
 git_binary = "/usr/bin/git"
@@ -49,24 +49,30 @@ schema_check_interval = 10
 
 # End configuration
 
+# Different handlers can be set for this, maybe for log display in IRC at some point
+log = logging.getLogger("schema-daemon")
+log.setLevel(logging.INFO)
+
+log_handler = logging.StreamHandler()
+log_handler.setLevel(logging.INFO)
+log_handler.setFormatter(logging.Formatter("%(levelname)s:\t %(message)s"))
+
+log.addHandler(log_handler)
+
 def process_schema_request(label, request):
     ims = request.get_header("If-modified-since")
-    if ims:
-        sys.stderr.write("\x1b[1m{0}\x1b[0m younger than \x1b[1m{1}\x1b[0m? ".format(label, ims))
-    else:
-        sys.stderr.write("Can I have a fresh \x1b[1m{0}\x1b[0m? ".format(label))
 
     try:
+        log.info("Checking for {0} younger than {1}".format(label, ims or "now"))
         response = urllib2.urlopen(request)
         schema = response.read()
         schemafile = open(os.path.join(tracker_dir, label), "wb")
         schemafile.write(schema)
         schemafile.close()
-
-        sys.stderr.write("\x1b[32;1mYes\x1b[0m\n")
     except urllib2.HTTPError as err:
-        if err.getcode() == 304:
-            sys.stderr.write("\x1b[31;1mNo\x1b[0m\n")
+        code = err.getcode()
+        if code != 304:
+            log.error("{0} server returned HTTP {1}".format(label, err.getcode()))
         return None
 
     return response, schema
@@ -74,8 +80,6 @@ def process_schema_request(label, request):
 while True:
     commit_summary = {}
     for k,v in games.iteritems():
-        sys.stderr.write("Starting {0} ({1})\n------------\n".format(k, v))
-
         url = "http://api.steampowered.com/IEconItems_{0}/GetSchema/v0001/?key={1}&language={2}".format(v, api_key, language)
 
         schema_base_name = "{0} Schema".format(k)
@@ -109,35 +113,40 @@ while True:
             if res:
                 client_schema_lm = res[0].headers.get("last-modified", "Missing LM")
 
-        if schema_lm: commit_summary[schema_base_name] = schema_lm
-        if client_schema_lm: commit_summary[client_schema_base_name] = client_schema_lm
+        if schema_lm:
+            commit_summary[schema_base_name] = schema_lm
+            log.info("Server returned {0} - Last change: {1}".format(schema_base_name, schema_lm))
 
-        sys.stderr.write("\nAPI: {0} - Client: {1}\n".format(schema_lm or "No change", client_schema_lm or "No change"))
-        sys.stderr.write("\n\n")
+        if client_schema_lm:
+            commit_summary[client_schema_base_name] = client_schema_lm
+            log.info("Server returned {0} - Last change: {1}".format(client_schema_base_name, client_schema_lm))
 
-    sys.stderr.write("Committing changes\n------------\n")
     summary_top = ", ".join(commit_summary.keys())
     summary_body = ""
     for k, v in commit_summary.items():
         summary_body += "{0}: {1}\n\n".format(k, v)
     if summary_top:
-        sys.stderr.write("{0}\n\n{1}\n".format(summary_top, summary_body))
+        bitbucket = None
+        if log.getEffectiveLevel() > logging.DEBUG: bitbucket = open(os.devnull, "w")
+
+        log.info("Preparing commit...")
+        log.debug("{0}\n\n{1}\n".format(summary_top, summary_body))
 
         git_env = {"GIT_DIR": tracker_git_dir, "GIT_WORKING_TREE": tracker_dir,
                    "GIT_AUTHOR_EMAIL": git_email, "GIT_AUTHOR_NAME": git_name,
                    "GIT_COMMITTER_EMAIL": git_email, "GIT_COMMITTER_NAME": git_name}
 
         # Add all working tree files
-        subprocess.Popen([git_binary, "add", "-A"], env = git_env, cwd = tracker_dir).wait()
+        subprocess.Popen([git_binary, "add", "-A"], env = git_env, cwd = tracker_dir, stdout = bitbucket).wait()
         # Commit all (just to make sure)
         subprocess.Popen([git_binary, "commit", "-a", "-m", summary_top + "\n\n" + summary_body + "\n"],
-                         env = git_env, cwd = tracker_dir).wait()
+                         env = git_env, cwd = tracker_dir, stdout = bitbucket).wait()
         # Poosh leetle tracker tree (if push URL is set)
         if tracker_push_url:
-            subprocess.Popen([git_binary, "push", "--mirror", tracker_push_url],
-                             env = git_env, cwd = tracker_dir).wait()
+            subprocess.Popen([git_binary, "push", "--porcelain", "--mirror", tracker_push_url],
+                             env = git_env, cwd = tracker_dir, stdout = bitbucket).wait()
     else:
-        sys.stderr.write("Nothing changed\n")
+        log.info("Nothing changed")
 
-    sys.stderr.write("\nSleeping for {0} second(s)\n".format(schema_check_interval))
+    log.info("Sleeping for {0} second(s)".format(schema_check_interval))
     time.sleep(schema_check_interval)
