@@ -74,6 +74,9 @@ def process_schema_request(label, request):
         if code != 304:
             log.error("{0} server returned HTTP {1}".format(label, err.getcode()))
         return None
+    except urllib2.URLError as err:
+        log.error(err)
+        return None
 
     return response, schema
 
