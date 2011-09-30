@@ -77,6 +77,9 @@ def process_schema_request(label, request):
     except urllib2.URLError as err:
         log.error(err)
         return None
+    except Exception as err:
+        log.error("Unknown error: {0}".format(str(err)))
+        return None
 
     return response, schema
 
