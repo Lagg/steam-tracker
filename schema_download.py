@@ -121,10 +121,14 @@ while True:
 
         if schema_lm:
             commit_summary[schema_base_name] = schema_lm
+            schema_lm_ts = time.mktime(email.utils.parsedate(schema_lm))
+            os.utime(schema_path, (schema_lm_ts, schema_lm_ts))
             log.info("Server returned {0} - Last change: {1}".format(schema_base_name, schema_lm))
 
         if client_schema_lm:
             commit_summary[client_schema_base_name] = client_schema_lm
+            client_schema_lm_ts = time.mktime(email.utils.parsedate(client_schema_lm))
+            os.utime(client_schema_path, (client_schema_lm_ts, client_schema_lm_ts))
             log.info("Server returned {0} - Last change: {1}".format(client_schema_base_name, client_schema_lm))
 
     summary_top = ", ".join(commit_summary.keys())
