@@ -106,11 +106,14 @@ while True:
 
         req = urllib2.Request(url, headers = req_headers)
         res = process_schema_request(schema_base_name, req)
-        if res:
-            schema_lm = res[0].headers.get("last-modified", "Missing LM")
-            schemadict = json.loads(res[1])
-        elif os.path.exists(schema_path):
-            schemadict = json.load(open(schema_path, "r"))
+	try:
+            if res:
+                schema_lm = res[0].headers.get("last-modified", "Missing LM")
+                schemadict = json.loads(res[1])
+            elif os.path.exists(schema_path):
+                schemadict = json.load(open(schema_path, "r"))
+	except Exception as e:
+            log.error("Schema load error: {0}".format(e))
 
         if schemadict:
             clientreq = urllib2.Request(schemadict["result"]["items_game_url"], headers = clientreq_headers)
