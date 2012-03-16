@@ -15,16 +15,17 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
 import json, urllib2, socket, email.utils, os, sys, subprocess, time, logging
-socket.timeout(1)
 
 # Configuration
 
 api_key = None
 language = "en"
+fetch_timeout = 5
 games = {"Portal 2": 620,
          "Team Fortress 2": 440,
          "Team Fortress 2 Beta": 520,
-         "DOTA 2": 570
+         "DOTA 2": 570,
+         "DOTA 2 Alt 1": 816
          }
 
 # GIT_WORKING_TREE is where the files are
@@ -64,7 +65,7 @@ def process_schema_request(label, request):
 
     try:
         log.info("Checking for {0} younger than {1}".format(label, ims or "now"))
-        response = urllib2.urlopen(request)
+        response = urllib2.urlopen(request, timeout = fetch_timeout)
         schema = response.read()
         schemafile = open(os.path.join(tracker_dir, label), "wb")
         schemafile.write(schema)
