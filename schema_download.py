@@ -84,15 +84,16 @@ def process_schema_request(label, request):
 
     return response, schema
 
-bitbucket = None
-if log.getEffectiveLevel() > logging.DEBUG: bitbucket = open(os.devnull, "w")
+bitbucket = open(os.devnull, "w")
 
 git_env = {"GIT_DIR": tracker_git_dir, "GIT_WORKING_TREE": tracker_dir,
            "GIT_AUTHOR_EMAIL": git_email, "GIT_AUTHOR_NAME": git_name,
            "GIT_COMMITTER_EMAIL": git_email, "GIT_COMMITTER_NAME": git_name}
 
 def run_git(command, *args):
-    return subprocess.Popen([git_binary, command] + list(args), env = git_env, cwd = tracker_dir, stdout = bitbucket).wait()
+    # Might want to do something about this later with better logging, but right now it's just going to be spam
+    code = subprocess.Popen([git_binary, command] + list(args), env = git_env, cwd = tracker_dir, stdout = bitbucket, stderr = bitbucket).wait()
+    log.info("Running git {0} ({1})".format(command, code))
 
 if not os.path.exists(tracker_dir):
     print("Initializing " + tracker_dir)
@@ -100,12 +101,15 @@ if not os.path.exists(tracker_dir):
     if ret != 0:
         print("Failed to create tracker dir, aborting")
         raise SystemExit
-    open(os.path.join(tracker_dir, "~"), "w")
+    print("Creating origin files")
+    gitignore = open(os.path.join(tracker_dir, ".gitignore"), "w")
+    gitignore.write("daemon.log\n")
+    gitignore.close()
     run_git("add", "-A")
-    run_git("commit", "-m", "origin")
+    run_git("commit", "-m", "Origin")
 
 while True:
-    for k,v in games.iteritems():
+    for k, v in games.iteritems():
         commit_summary = {}
         ideal_branch_name = k.replace(' ', '').lower()
         url = "http://api.steampowered.com/IEconItems_{0}/GetSchema/v0001/?key={1}&language={2}".format(v, api_key, language)
@@ -160,7 +164,7 @@ while True:
             log.info("Server returned {0} - Last change: {1}".format(client_schema_base_name, client_schema_lm))
 
         summary_top = ", ".join(commit_summary.keys())
-        summary_body = "\n\n".join(["{0}: {1}".format(k, v) for k, v in commit_summary.items()])
+        summary_body = "\n\n".join(["{0}: {1}".format(k, v) for k, v in commit_summary.iteritems()])
         if summary_top:
             log.info("Preparing commit...")
             log.debug("{0}\n\n{1}\n".format(summary_top, summary_body))
