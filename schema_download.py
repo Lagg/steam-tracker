@@ -14,7 +14,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
-import json, urllib2, socket, email.utils, os, sys, subprocess, time, logging
+import json, urllib2, socket, os, sys, subprocess, time, logging
 
 # Configuration
 
@@ -60,12 +60,25 @@ log_handler.setFormatter(logging.Formatter("%(levelname)s:\t %(message)s"))
 
 log.addHandler(log_handler)
 
-def process_schema_request(label, request):
-    ims = request.get_header("If-modified-since")
+lm_store = {}
+
+def process_schema_request(label, url):
+    reqheaders = {}
 
     try:
-        log.info("Checking for {0} younger than {1}".format(label, ims or "now"))
+        lm = lm_store.get(label)
+        if lm: reqheaders["If-Modified-Since"] = lm
+
+        request = urllib2.Request(url, headers = reqheaders)
+
+        log.info("Checking for {0} younger than {1}".format(label, lm or "now"))
         response = urllib2.urlopen(request, timeout = fetch_timeout)
+
+        lm_stamp = response.headers.get("last-modified")
+        if lm_stamp: lm_store[label] = lm_stamp
+
+        log.info("Server returned {0} - Last change: {1}".format(label, lm_stamp or "Eternal"))
+
         schema = response.read()
         schemafile = open(os.path.join(tracker_dir, label), "wb")
         schemafile.write(schema)
@@ -73,7 +86,7 @@ def process_schema_request(label, request):
     except urllib2.HTTPError as err:
         code = err.getcode()
         if code != 304:
-            log.error("{0} server returned HTTP {1}".format(label, err.getcode()))
+            log.error("{0} server returned HTTP {1}".format(label, code))
         return None
     except urllib2.URLError as err:
         log.error(err)
@@ -82,7 +95,7 @@ def process_schema_request(label, request):
         log.error("Unknown error: {0}".format(str(err)))
         return None
 
-    return response, schema
+    return schema
 
 bitbucket = open(os.devnull, "w")
 
@@ -117,51 +130,26 @@ while True:
         client_schema_base_name = "{0} Client Schema".format(k)
         schema_path = os.path.join(tracker_dir, schema_base_name)
         client_schema_path = os.path.join(tracker_dir, client_schema_base_name)
-        req_headers = {}
-        clientreq_headers = {}
         schemadict = None
-        schema_lm = ""
-        client_schema_lm = ""
 
         # Checkout branch
         run_git("branch", ideal_branch_name, "master")
         run_git("checkout", ideal_branch_name)
 
-        if os.path.exists(schema_path):
-            req_headers["If-Modified-Since"] = email.utils.formatdate(os.stat(schema_path).st_mtime, usegmt=True)
-
-        if os.path.exists(client_schema_path):
-            clientreq_headers["If-Modified-Since"] = email.utils.formatdate(os.stat(client_schema_path).st_mtime, usegmt=True)
-
-        req = urllib2.Request(url, headers = req_headers)
-        res = process_schema_request(schema_base_name, req)
+        res = process_schema_request(schema_base_name, url)
 	try:
             if res:
-                schema_lm = res[0].headers.get("last-modified", "Missing LM")
-                schemadict = json.loads(res[1])
+                schemadict = json.loads(res)
+                commit_summary[schema_base_name] = lm_store[schema_base_name]
             elif os.path.exists(schema_path):
                 schemadict = json.load(open(schema_path, "r"))
 	except Exception as e:
             log.error("Schema load error: {0}".format(e))
 
         if schemadict:
-            clientreq = urllib2.Request(schemadict["result"]["items_game_url"], headers = clientreq_headers)
-
-            res = process_schema_request(client_schema_base_name, clientreq)
+            res = process_schema_request(client_schema_base_name, schemadict["result"]["items_game_url"])
             if res:
-                client_schema_lm = res[0].headers.get("last-modified", "Missing LM")
-
-        if schema_lm:
-            commit_summary[schema_base_name] = schema_lm
-            schema_lm_ts = time.mktime(email.utils.parsedate(schema_lm))
-            os.utime(schema_path, (schema_lm_ts, schema_lm_ts))
-            log.info("Server returned {0} - Last change: {1}".format(schema_base_name, schema_lm))
-
-        if client_schema_lm:
-            commit_summary[client_schema_base_name] = client_schema_lm
-            client_schema_lm_ts = time.mktime(email.utils.parsedate(client_schema_lm))
-            os.utime(client_schema_path, (client_schema_lm_ts, client_schema_lm_ts))
-            log.info("Server returned {0} - Last change: {1}".format(client_schema_base_name, client_schema_lm))
+                commit_summary[client_schema_base_name] = lm_store[client_schema_base_name]
 
         summary_top = ", ".join(commit_summary.keys())
         summary_body = "\n\n".join(["{0}: {1}".format(k, v) for k, v in commit_summary.iteritems()])
