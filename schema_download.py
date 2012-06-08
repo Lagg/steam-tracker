@@ -14,12 +14,14 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
-import json, urllib2, socket, os, sys, subprocess, time, logging
+import json, os, sys, subprocess, time, logging
+import pycurl as pc
+from cStringIO import StringIO
 
 # Configuration
 
 api_key = None
-language = "en"
+language = "en_US"
 fetch_timeout = 5
 games = {"Portal 2": 620,
          "Team Fortress 2": 440,
@@ -48,6 +50,12 @@ git_email = "noreply@wiki.teamfortress.com"
 # Number of seconds to sleep between schema checks, can be less than 1 (e.g. 0.50 for half a second)
 schema_check_interval = 10
 
+# Max number of concurrent connections to allow.
+connection_pool_size = len(games)
+
+# User agent to send in HTTP requests
+connection_user_agent = "Lagg/Wiki-Tracker"
+
 # End configuration
 
 # Different handlers can be set for this, maybe for log display in IRC at some point
@@ -60,42 +68,23 @@ log_handler.setFormatter(logging.Formatter("%(levelname)s:\t %(message)s"))
 
 log.addHandler(log_handler)
 
-lm_store = {}
+# Keeps track of last-modified stamps for both schemas
+api_lm_store = {}
+client_lm_store = {}
 
-def process_schema_request(label, url):
-    reqheaders = {}
+# Caches items_game URLs
+client_schema_urls = {}
 
-    try:
-        lm = lm_store.get(label)
-        if lm: reqheaders["If-Modified-Since"] = lm
+def make_header_dict(value):
+    hs = value.splitlines()
+    hdict = {}
 
-        request = urllib2.Request(url, headers = reqheaders)
+    for hdr in hs:
+        sep = hdr.find(':')
+        if sep != -1:
+            hdict[hdr[:sep].strip().lower()] = hdr[sep + 1:].strip()
 
-        log.info("Checking for {0} younger than {1}".format(label, lm or "now"))
-        response = urllib2.urlopen(request, timeout = fetch_timeout)
-
-        lm_stamp = response.headers.get("last-modified")
-        if lm_stamp: lm_store[label] = lm_stamp
-
-        log.info("Server returned {0} - Last change: {1}".format(label, lm_stamp or "Eternal"))
-
-        schema = response.read()
-        schemafile = open(os.path.join(tracker_dir, label), "wb")
-        schemafile.write(schema)
-        schemafile.close()
-    except urllib2.HTTPError as err:
-        code = err.getcode()
-        if code != 304:
-            log.error("{0} server returned HTTP {1}".format(label, code))
-        return None
-    except urllib2.URLError as err:
-        log.error(err)
-        return None
-    except Exception as err:
-        log.error("Unknown error: {0}".format(str(err)))
-        return None
-
-    return schema
+    return hdict
 
 bitbucket = open(os.devnull, "w")
 
@@ -121,44 +110,164 @@ if not os.path.exists(tracker_dir):
     run_git("add", "-A")
     run_git("commit", "-m", "Origin")
 
+multi = pc.CurlMulti()
+
+singlestack = []
+for i in range(connection_pool_size):
+    single = pc.Curl()
+
+    single.setopt(pc.FOLLOWLOCATION, 1)
+    single.setopt(pc.USERAGENT, connection_user_agent)
+    single.setopt(pc.NOSIGNAL, 1)
+    single.setopt(pc.CONNECTTIMEOUT, fetch_timeout)
+    single.setopt(pc.TIMEOUT, 240)
+
+    singlestack.append(single)
+
+urlstack = []
+for k, v in games.iteritems():
+    url = (k, "http://api.steampowered.com/IEconItems_{0}/GetSchema/v0001/?key={1}&language={2}".format(v, api_key, language))
+    urlstack.append(url)
+
+freeobjects = singlestack[:]
+
+def download_urls(urls, lm_store):
+    body = {}
+    headers = {}
+    urlcount = len(urls)
+    finished_reqs = 0
+
+    while finished_reqs < urlcount:
+        while urls and freeobjects:
+            appid, url = urls.pop()
+            single = freeobjects.pop()
+            body[appid] = StringIO()
+            headers[appid] = StringIO()
+            lm = lm_store.get(appid)
+
+            single.setopt(pc.URL, str(url))
+            single.setopt(pc.WRITEFUNCTION, body[appid].write)
+            single.setopt(pc.HEADERFUNCTION, headers[appid].write)
+            if lm: single.setopt(pc.HTTPHEADER, ["if-modified-since: " + lm])
+
+            single.optf2_label = appid
+
+            log.info("Checking for {0} younger than {1}".format(appid, lm or "now"))
+
+            multi.add_handle(single)
+
+        while True:
+            res, handles = multi.perform()
+            if res != pc.E_CALL_MULTI_PERFORM:
+                break
+
+        while True:
+            msgs_rem, done, err = multi.info_read()
+
+            for h in done:
+                header = make_header_dict(headers[h.optf2_label].getvalue())
+                if 'last-modified' in header:
+                    lm_store[h.optf2_label] = header['last-modified']
+
+                response = h.getinfo(pc.RESPONSE_CODE)
+                if response == 304:
+                    log.info(h.optf2_label + ": Server says nothing new")
+                elif response != 200:
+                    log.error(h.optf2_label + ": Server returned HTTP " + str(response))
+                else:
+                    log.info("Done: {0} - Last change: {1}".format(h.optf2_label, lm_store.get(h.optf2_label) or "Eternal"))
+
+                multi.remove_handle(h)
+                freeobjects.append(h)
+
+            for h, code, msg in err:
+                log.error("Failed: {0} - {1}".format(h.optf2_label, msg))
+                multi.remove_handle(h)
+                freeobjects.append(h)
+
+            finished_reqs += len(done) + len(err)
+
+            if msgs_rem == 0:
+                break
+
+        multi.select(1)
+
+    return headers, body
+
+def get_ideal_branch_name(label):
+    return label.replace(' ', '').lower()
+
 while True:
-    for k, v in games.iteritems():
-        commit_summary = {}
-        ideal_branch_name = k.replace(' ', '').lower()
-        url = "http://api.steampowered.com/IEconItems_{0}/GetSchema/v0001/?key={1}&language={2}".format(v, api_key, language)
-        schema_base_name = "{0} Schema".format(k)
-        client_schema_base_name = "{0} Client Schema".format(k)
+    urls = urlstack[:]
+    clienturls = []
+    commit_summary = {}
+    schemadata = {}
+
+    log.info("Downloading API schemas...")
+    headers, body = download_urls(urls, api_lm_store)
+
+    for k, v in body.iteritems():
+        schema_base_name = k + " Schema"
         schema_path = os.path.join(tracker_dir, schema_base_name)
-        client_schema_path = os.path.join(tracker_dir, client_schema_base_name)
-        schemadict = None
+
+        try:
+            commit_summary[k] = {schema_base_name: api_lm_store[k]}
+            schemadict = None
+            res = v.getvalue()
+
+            if res:
+                schemadict = json.loads(res)
+                schemadata[schema_base_name] = res
+            elif k not in client_schema_urls:
+                run_git("checkout", get_ideal_branch_name(k))
+                if os.path.exists(schema_path):
+                    schemadict = json.load(open(schema_path, "rb"))
+
+            if schemadict:
+                client_schema_urls[k] = schemadict["result"]["items_game_url"]
+
+            clienturls.append((k, client_schema_urls[k]))
+        except Exception as e:
+            log.info("Failing API schema write softly: " + str(e))
+
+    log.info("Downloading client schemas...")
+    clientheaders, clientbody = download_urls(clienturls, client_lm_store)
+
+    for k, v in clientbody.iteritems():
+        res = v.getvalue()
+        schema_base_name = k + " Client Schema"
+
+        if res:
+            schemadata[schema_base_name] = res
+
+        commit_summary[k][schema_base_name] = client_lm_store[k]
+
+    for game, summary in commit_summary.iteritems():
+        ideal_branch_name = get_ideal_branch_name(game)
+        files = summary.keys()
 
         # Checkout branch
         run_git("branch", ideal_branch_name, "master")
         run_git("checkout", ideal_branch_name)
 
-        res = process_schema_request(schema_base_name, url)
-	try:
-            if res:
-                schemadict = json.loads(res)
-                commit_summary[schema_base_name] = lm_store[schema_base_name]
-            elif os.path.exists(schema_path):
-                schemadict = json.load(open(schema_path, "r"))
-	except Exception as e:
-            log.error("Schema load error: {0}".format(e))
+        # Write schemas
+        validfiles = []
+        for f in files:
+            if f in schemadata:
+                validfiles.append(f)
+                fstream = open(os.path.join(tracker_dir, f), "wb")
+                fstream.write(schemadata[f])
+                fstream.close()
+                del schemadata[f]
 
-        if schemadict:
-            res = process_schema_request(client_schema_base_name, schemadict["result"]["items_game_url"])
-            if res:
-                commit_summary[client_schema_base_name] = lm_store[client_schema_base_name]
-
-        summary_top = ", ".join(commit_summary.keys())
-        summary_body = "\n\n".join(["{0}: {1}".format(k, v) for k, v in commit_summary.iteritems()])
+        summary_top = ", ".join(validfiles)
+        summary_body = "\n\n".join(["{0}: {1}".format(k, v) for k, v in summary.iteritems()])
         if summary_top:
-            log.info("Preparing commit...")
-            log.debug("{0}\n\n{1}\n".format(summary_top, summary_body))
+            log.info("Committing: " + summary_top)
+            log.debug(summary_body)
 
-            # Add all working tree files
-            run_git("add", "-A")
+            # Add current game files
+            run_git("add", *validfiles)
 
             # Commit all (just to make sure)
             run_git("commit", "-m", summary_top + "\n\n" + summary_body + "\n")
@@ -167,7 +276,7 @@ while True:
             if tracker_push_url:
                 run_git("push", "--porcelain", "--mirror", tracker_push_url)
         else:
-            log.info("Nothing changed")
+            log.info("Nothing changed for " + game)
 
     log.info("Sleeping for {0} second(s)".format(schema_check_interval))
     time.sleep(schema_check_interval)
