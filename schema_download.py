@@ -242,6 +242,7 @@ while True:
 
         commit_summary[k][schema_base_name] = client_lm_store[k]
 
+    pushready = False
     for game, summary in commit_summary.iteritems():
         ideal_branch_name = get_ideal_branch_name(game)
         files = summary.keys()
@@ -263,6 +264,8 @@ while True:
         summary_top = ", ".join(validfiles)
         summary_body = "\n\n".join(["{0}: {1}".format(k, v) for k, v in summary.iteritems()])
         if summary_top:
+            pushready = True
+
             log.info("Committing: " + summary_top)
             log.debug(summary_body)
 
@@ -271,12 +274,13 @@ while True:
 
             # Commit all (just to make sure)
             run_git("commit", "-m", summary_top + "\n\n" + summary_body + "\n")
-
-            # Poosh leetle tracker tree (if push URL is set)
-            if tracker_push_url:
-                run_git("push", "--porcelain", "--mirror", tracker_push_url)
         else:
             log.info("Nothing changed for " + game)
+
+    # Poosh leetle tracker tree (if push URL is set)
+    if tracker_push_url and pushready:
+        log.info("Pushing commits...")
+        run_git("push", "--porcelain", "--mirror", tracker_push_url)
 
     log.info("Sleeping for {0} second(s)".format(schema_check_interval))
     time.sleep(schema_check_interval)
