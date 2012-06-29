@@ -14,9 +14,8 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
-import json, os, sys, subprocess, time, logging
+import json, os, sys, subprocess, time, logging, hashlib, re
 import pycurl as pc
-from cStringIO import StringIO
 
 # Configuration
 
@@ -132,6 +131,31 @@ for k, v in games.iteritems():
 
 freeobjects = singlestack[:]
 
+whitespace_exp = re.compile("\s", re.UNICODE)
+
+class request_body:
+    def write(self, data):
+        self._body += data
+        self._sha.update(whitespace_exp.sub('', data))
+
+        return len(data)
+
+    def __str__(self):
+        return str(self._body)
+
+    def __eq__(self, other):
+        return self._sha.digest() == other._sha.digest()
+
+    def hash(self):
+        return self._sha
+
+    def close(self):
+        pass
+
+    def __init__(self):
+        self._body = ""
+        self._sha = hashlib.sha1()
+
 def download_urls(urls, lm_store):
     body = {}
     headers = {}
@@ -142,8 +166,8 @@ def download_urls(urls, lm_store):
         while urls and freeobjects:
             appid, url = urls.pop()
             single = freeobjects.pop()
-            body[appid] = StringIO()
-            headers[appid] = StringIO()
+            body[appid] = request_body()
+            headers[appid] = request_body()
             lm = lm_store.get(appid)
 
             single.setopt(pc.URL, str(url))
@@ -166,17 +190,26 @@ def download_urls(urls, lm_store):
             msgs_rem, done, err = multi.info_read()
 
             for h in done:
-                header = make_header_dict(headers[h.optf2_label].getvalue())
-                if 'last-modified' in header:
-                    lm_store[h.optf2_label] = header['last-modified']
-
                 response = h.getinfo(pc.RESPONSE_CODE)
-                if response == 304:
-                    log.info(h.optf2_label + ": Server says nothing new")
-                elif response != 200:
-                    log.error(h.optf2_label + ": Server returned HTTP " + str(response))
-                else:
+
+                if response == 200:
+                    header = make_header_dict(str(headers[h.optf2_label]))
+                    if 'last-modified' in header:
+                        lm_store[h.optf2_label] = header['last-modified']
+
                     log.info("Done: {0} - Last change: {1}".format(h.optf2_label, lm_store.get(h.optf2_label) or "Eternal"))
+                else:
+                    if response == 304:
+                        log.info(h.optf2_label + ": Server says nothing new")
+                    else:
+                        log.error(h.optf2_label + ": Server returned HTTP " + str(response))
+
+                    appid = h.optf2_label
+                    try:
+                        del body[appid]
+                        del headers[appid]
+                    except KeyError:
+                        pass
 
                 multi.remove_handle(h)
                 freeobjects.append(h)
@@ -214,15 +247,27 @@ while True:
         try:
             commit_summary[k] = {schema_base_name: api_lm_store[k]}
             schemadict = None
-            res = v.getvalue()
+            res = str(v)
+            olddata = None
+
+            run_git("checkout", get_ideal_branch_name(k))
+            if os.path.exists(schema_path):
+                with open(schema_path, "rb") as fs:
+                    olddata = fs.read()
 
             if res:
+                if olddata:
+                    oldhash = hashlib.sha1(whitespace_exp.sub('', olddata))
+                    newhash = v.hash()
+                    if oldhash.digest() == newhash.digest():
+                        log.info(schema_base_name + " hasn't changed (" + newhash.hexdigest() + ")")
+                        continue
+
                 schemadict = json.loads(res)
                 schemadata[schema_base_name] = res
-            elif k not in client_schema_urls:
-                run_git("checkout", get_ideal_branch_name(k))
-                if os.path.exists(schema_path):
-                    schemadict = json.load(open(schema_path, "rb"))
+
+            elif k not in client_schema_urls and olddata:
+                schemadict = json.loads(olddata)
 
             if schemadict:
                 client_schema_urls[k] = schemadict["result"]["items_game_url"]
@@ -231,11 +276,14 @@ while True:
         except Exception as e:
             log.info("Failing API schema write softly: " + str(e))
 
-    log.info("Downloading client schemas...")
-    clientheaders, clientbody = download_urls(clienturls, client_lm_store)
+    clientbody = {}
+    # Don't bother if client url list is empty
+    if clienturls:
+        log.info("Downloading client schemas...")
+        clientheaders, clientbody = download_urls(clienturls, client_lm_store)
 
     for k, v in clientbody.iteritems():
-        res = v.getvalue()
+        res = str(v)
         schema_base_name = k + " Client Schema"
 
         if res:
@@ -257,7 +305,8 @@ while True:
         for f in files:
             if f in schemadata:
                 validfiles.append(f)
-                fstream = open(os.path.join(tracker_dir, f), "wb")
+                path = os.path.join(tracker_dir, f)
+                fstream = open(path, "wb")
                 fstream.write(schemadata[f])
                 fstream.close()
                 del schemadata[f]
