@@ -14,7 +14,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
-import json, os, sys, subprocess, time, logging, hashlib, re
+import json, os, sys, subprocess, time, logging
 import pycurl as pc
 
 # Configuration
@@ -131,30 +131,20 @@ for k, v in games.iteritems():
 
 freeobjects = singlestack[:]
 
-whitespace_exp = re.compile("\s", re.UNICODE)
-
 class request_body:
     def write(self, data):
         self._body += data
-        self._sha.update(whitespace_exp.sub('', data))
 
         return len(data)
 
     def __str__(self):
-        return str(self._body)
-
-    def __eq__(self, other):
-        return self._sha.digest() == other._sha.digest()
-
-    def hash(self):
-        return self._sha
+        return str(self._body).replace("\r\n", '\n').replace('\r', '\n')
 
     def close(self):
         pass
 
     def __init__(self):
         self._body = ""
-        self._sha = hashlib.sha1()
 
 def download_urls(urls, lm_store):
     body = {}
@@ -256,16 +246,8 @@ while True:
                     olddata = fs.read()
 
             if res:
-                if olddata:
-                    oldhash = hashlib.sha1(whitespace_exp.sub('', olddata))
-                    newhash = v.hash()
-                    if oldhash.digest() == newhash.digest():
-                        log.info(schema_base_name + " hasn't changed (" + newhash.hexdigest() + ")")
-                        continue
-
                 schemadict = json.loads(res)
                 schemadata[schema_base_name] = res
-
             elif k not in client_schema_urls and olddata:
                 schemadict = json.loads(olddata)
 
@@ -288,6 +270,8 @@ while True:
 
         if res:
             schemadata[schema_base_name] = res
+
+        if k not in commit_summary: commit_summary[k] = {}
 
         commit_summary[k][schema_base_name] = client_lm_store[k]
 
