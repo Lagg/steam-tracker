@@ -100,21 +100,6 @@ if not os.path.exists(tracker_dir):
     run_git("add", "-A")
     run_git("commit", "-m", "Origin")
 
-class request_body:
-    def write(self, data):
-        self._body += data
-
-        return len(data)
-
-    def __str__(self):
-        return str(self._body).replace("\r\n", '\n').replace('\r', '\n')
-
-    def close(self):
-        pass
-
-    def __init__(self):
-        self._body = ""
-
 ts_logfmt = "{0:<" + str(sorted(map(len, games.keys()), reverse = True)[0]) + "} {1}"
 class download_thread(threading.Thread):
     def __init__(self, inq, outq):
@@ -134,7 +119,7 @@ class download_thread(threading.Thread):
 
             try:
                 response = urllib2.urlopen(req)
-                content = response.read()
+                content = response.read().replace("\r\n", '\n').replace('\r', '\n')
                 lm = response.headers.get("last-modified", "never")
                 log.info("New: " + ts_logfmt.format(appname, lm))
             except urllib2.HTTPError as E:
