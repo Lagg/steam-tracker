@@ -14,8 +14,9 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
-import json, os, sys, subprocess, time, logging
-import pycurl as pc
+import json, os, sys, subprocess, time, logging, urllib2
+import threading, Queue
+from collections import deque
 
 # Configuration
 
@@ -75,17 +76,6 @@ client_lm_store = {}
 # Caches items_game URLs
 client_schema_urls = {}
 
-def make_header_dict(value):
-    hs = value.splitlines()
-    hdict = {}
-
-    for hdr in hs:
-        sep = hdr.find(':')
-        if sep != -1:
-            hdict[hdr[:sep].strip().lower()] = hdr[sep + 1:].strip()
-
-    return hdict
-
 bitbucket = open(os.devnull, "w")
 
 git_env = {"GIT_DIR": tracker_git_dir, "GIT_WORKING_TREE": tracker_dir,
@@ -110,27 +100,6 @@ if not os.path.exists(tracker_dir):
     run_git("add", "-A")
     run_git("commit", "-m", "Origin")
 
-multi = pc.CurlMulti()
-
-singlestack = []
-for i in range(connection_pool_size):
-    single = pc.Curl()
-
-    single.setopt(pc.FOLLOWLOCATION, 1)
-    single.setopt(pc.USERAGENT, connection_user_agent)
-    single.setopt(pc.NOSIGNAL, 1)
-    single.setopt(pc.CONNECTTIMEOUT, fetch_timeout)
-    single.setopt(pc.TIMEOUT, 240)
-
-    singlestack.append(single)
-
-urlstack = []
-for k, v in games.iteritems():
-    url = (k, "http://api.steampowered.com/IEconItems_{0}/GetSchema/v0001/?key={1}&language={2}".format(v, api_key, language))
-    urlstack.append(url)
-
-freeobjects = singlestack[:]
-
 class request_body:
     def write(self, data):
         self._body += data
@@ -146,89 +115,81 @@ class request_body:
     def __init__(self):
         self._body = ""
 
+ts_logfmt = "{0:<" + str(sorted(map(len, games.keys()), reverse = True)[0]) + "} {1}"
+class download_thread(threading.Thread):
+    def __init__(self, inq, outq):
+        self.inq = inq
+        self.outq = outq
+        threading.Thread.__init__(self)
+
+    def run(self):
+        while True:
+            appname, url, lm = self.inq.get()
+
+            req = urllib2.Request(url)
+            req.add_header("User-Agent", connection_user_agent)
+            if lm:
+                req.add_header("If-Modified-Since", lm)
+            content = ''
+
+            try:
+                response = urllib2.urlopen(req)
+                content = response.read()
+                lm = response.headers.get("last-modified", "never")
+                log.info("New: " + ts_logfmt.format(appname, lm))
+            except urllib2.HTTPError as E:
+                code = E.getcode()
+
+                if code == 304:
+                    log.info("Old: " + ts_logfmt.format(appname, lm))
+                else:
+                    log.error("HTTP {0} received".format(code))
+
+            self.outq.append((appname, content, lm))
+
+            self.inq.task_done()
+
+inqueue = Queue.Queue()
+outqueue = deque()
+
+for i in range(connection_pool_size):
+    t = download_thread(inqueue, outqueue)
+    t.daemon = True
+    t.start()
+
 def download_urls(urls, lm_store):
     body = {}
-    headers = {}
-    urlcount = len(urls)
-    finished_reqs = 0
 
-    while finished_reqs < urlcount:
-        while urls and freeobjects:
-            appid, url = urls.pop()
-            single = freeobjects.pop()
-            body[appid] = request_body()
-            headers[appid] = request_body()
-            lm = lm_store.get(appid)
+    for appname, url  in urls:
+        inqueue.put((appname, url, lm_store.get(appname)))
 
-            single.setopt(pc.URL, str(url))
-            single.setopt(pc.WRITEFUNCTION, body[appid].write)
-            single.setopt(pc.HEADERFUNCTION, headers[appid].write)
-            if lm: single.setopt(pc.HTTPHEADER, ["if-modified-since: " + lm])
+    inqueue.join()
 
-            single.optf2_label = appid
+    while True:
+        try:
+            app, content, lm = outqueue.pop()
+            body[app] = content
+            lm_store[app] = lm
+        except IndexError:
+            break
 
-            log.info("Checking for {0} younger than {1}".format(appid, lm or "now"))
-
-            multi.add_handle(single)
-
-        while True:
-            res, handles = multi.perform()
-            if res != pc.E_CALL_MULTI_PERFORM:
-                break
-
-        while True:
-            msgs_rem, done, err = multi.info_read()
-
-            for h in done:
-                response = h.getinfo(pc.RESPONSE_CODE)
-
-                if response == 200:
-                    header = make_header_dict(str(headers[h.optf2_label]))
-                    if 'last-modified' in header:
-                        lm_store[h.optf2_label] = header['last-modified']
-
-                    log.info("Done: {0} - Last change: {1}".format(h.optf2_label, lm_store.get(h.optf2_label) or "Eternal"))
-                else:
-                    if response == 304:
-                        log.info(h.optf2_label + ": Server says nothing new")
-                    else:
-                        log.error(h.optf2_label + ": Server returned HTTP " + str(response))
-
-                    appid = h.optf2_label
-                    try:
-                        del body[appid]
-                        del headers[appid]
-                    except KeyError:
-                        pass
-
-                multi.remove_handle(h)
-                freeobjects.append(h)
-
-            for h, code, msg in err:
-                log.error("Failed: {0} - {1}".format(h.optf2_label, msg))
-                multi.remove_handle(h)
-                freeobjects.append(h)
-
-            finished_reqs += len(done) + len(err)
-
-            if msgs_rem == 0:
-                break
-
-        multi.select(1)
-
-    return headers, body
+    return body
 
 def get_ideal_branch_name(label):
     return label.replace(' ', '').lower()
 
+urls = []
+for k, v in games.iteritems():
+    url = (k, "http://api.steampowered.com/IEconItems_{0}/GetSchema/v0001/?key={1}&language={2}".format(v, api_key, language))
+    urls.append(url)
+
 while True:
-    urls = urlstack[:]
     clienturls = []
     commit_summary = {}
     schemadata = {}
 
     log.info("Downloading API schemas...")
-    headers, body = download_urls(urls, api_lm_store)
+    body = download_urls(urls, api_lm_store)
 
     for k, v in body.iteritems():
         schema_base_name = k + " Schema"
@@ -256,13 +217,13 @@ while True:
 
             clienturls.append((k, client_schema_urls[k]))
         except Exception as e:
-            log.info("Failing API schema write softly: " + str(e))
+            log.error("Failing API schema write softly: " + str(e))
 
     clientbody = {}
     # Don't bother if client url list is empty
     if clienturls:
         log.info("Downloading client schemas...")
-        clientheaders, clientbody = download_urls(clienturls, client_lm_store)
+        clientbody = download_urls(clienturls, client_lm_store)
 
     for k, v in clientbody.iteritems():
         res = str(v)
