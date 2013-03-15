@@ -118,7 +118,7 @@ class download_thread(threading.Thread):
             content = ''
 
             try:
-                response = urllib2.urlopen(req)
+                response = urllib2.urlopen(req, timeout = fetch_timeout)
                 content = response.read().replace("\r\n", '\n').replace('\r', '\n')
                 lm = response.headers.get("last-modified", "never")
                 log.info("New: " + ts_logfmt.format(appname, lm))
