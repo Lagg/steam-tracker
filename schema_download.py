@@ -129,6 +129,8 @@ class download_thread(threading.Thread):
                     log.info("Old: " + ts_logfmt.format(appname, lm))
                 else:
                     log.error("HTTP {0} received".format(code))
+            except Exception as E:
+                log.error("Unknown error: " + repr(E))
 
             self.outq.append((appname, content, lm))
 
