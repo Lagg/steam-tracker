@@ -16,7 +16,6 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 import json, os, sys, subprocess, time, logging, urllib2
 import threading, Queue
-from collections import deque
 
 # Configuration
 
@@ -63,7 +62,7 @@ connection_user_agent = "Lagg/Wiki-Tracker"
 log = logging.getLogger("schema-daemon")
 log.setLevel(logging.INFO)
 
-log_handler = logging.StreamHandler()
+log_handler = logging.StreamHandler(sys.stdout)
 log_handler.setLevel(logging.INFO)
 log_handler.setFormatter(logging.Formatter("%(levelname)s:\t %(message)s"))
 
@@ -103,9 +102,9 @@ if not os.path.exists(tracker_dir):
 ts_logfmt = "{0:<" + str(sorted(map(len, games.keys()), reverse = True)[0]) + "} {1}"
 class download_thread(threading.Thread):
     def __init__(self, inq, outq):
+	super(download_thread, self).__init__()
         self.inq = inq
         self.outq = outq
-        threading.Thread.__init__(self)
 
     def run(self):
         while True:
@@ -118,8 +117,10 @@ class download_thread(threading.Thread):
             content = ''
 
             try:
+                log.info("Starting " + appname)
                 response = urllib2.urlopen(req, timeout = fetch_timeout)
                 content = response.read().replace("\r\n", '\n').replace('\r', '\n')
+                log.info("Ending " + appname)
                 lm = response.headers.get("last-modified", "never")
                 log.info("New: " + ts_logfmt.format(appname, lm))
             except urllib2.HTTPError as E:
@@ -132,12 +133,12 @@ class download_thread(threading.Thread):
             except Exception as E:
                 log.error("Unknown error: " + repr(E))
 
-            self.outq.append((appname, content, lm))
+            self.outq.put((appname, content, lm))
 
             self.inq.task_done()
 
 inqueue = Queue.Queue()
-outqueue = deque()
+outqueue = Queue.Queue()
 
 for i in range(connection_pool_size):
     t = download_thread(inqueue, outqueue)
@@ -150,15 +151,23 @@ def download_urls(urls, lm_store):
     for appname, url  in urls:
         inqueue.put((appname, url, lm_store.get(appname)))
 
-    inqueue.join()
+    expected = len(urls)
+    received = 0
+    maxtries = 5
+    usedtries = 0
 
-    while True:
+    while usedtries < maxtries and received < expected:
         try:
-            app, content, lm = outqueue.pop()
+            app, content, lm = outqueue.get(timeout = 5)
             body[app] = content
             lm_store[app] = lm
-        except IndexError:
-            break
+            received += 1
+            usedtries = 0
+        except Queue.Empty:
+            usedtries += 1
+
+    if received != expected:
+        log.error("Expected {0} - Got {1} ({2}/{3} retries used)".format(expected, received, usedtries, maxtries))
 
     return body
 
