@@ -27,7 +27,8 @@ games = {"Portal 2": 620,
          "Team Fortress 2 Beta": 520,
          "DOTA 2": 570,
          "DOTA 2 Alt 1": 816,
-         "DOTA 2 Beta": 205790
+         "DOTA 2 Beta": 205790,
+         "Counter Strike Global Offensive": 730
          }
 
 # GIT_WORKING_TREE is where the files are
