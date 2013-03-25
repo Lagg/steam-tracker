@@ -262,7 +262,7 @@ while True:
     download_schemas()
 
     # Poosh leetle tracker tree (if push URL is set)
-    if tracker_push_url and pushready:
+    if tracker_push_url:
         log.info("Pushing commits...")
         run_git("push", "--porcelain", "--all", tracker_push_url)
 
