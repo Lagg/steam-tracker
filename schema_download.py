@@ -85,6 +85,7 @@ def run_git(command, *args):
     # Might want to do something about this later with better logging, but right now it's just going to be spam
     code = subprocess.Popen([git_binary, command] + list(args), env = git_env, cwd = tracker_dir, stdout = bitbucket, stderr = bitbucket).wait()
     log.info("Running git {0} ({1})".format(command, code))
+    return code
 
 if not os.path.exists(tracker_dir):
     print("Initializing " + tracker_dir)
@@ -271,7 +272,7 @@ while True:
     # Poosh leetle tracker tree (if push URL is set)
     if tracker_push_url and pushready:
         log.info("Pushing commits...")
-        run_git("push", "--porcelain", "--mirror", tracker_push_url)
+        run_git("push", "--porcelain", "--all", tracker_push_url)
 
     log.info("Sleeping for {0} second(s)".format(schema_check_interval))
     time.sleep(schema_check_interval)
