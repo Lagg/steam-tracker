@@ -86,7 +86,7 @@ git_env = {"GIT_DIR": tracker_git_dir, "GIT_WORKING_TREE": tracker_dir,
 
 def run_git(command, *args):
     # Might want to do something about this later with better logging, but right now it's just going to be spam
-    code = subprocess.Popen([git_binary, command] + list(args), env = git_env, cwd = tracker_dir, stdout = bitbucket, stderr = bitbucket).wait()
+    code = subprocess.call([git_binary, command] + list(args), env = git_env, cwd = tracker_dir, stdout = bitbucket, stderr = bitbucket)
     log.info("Running git {0} ({1})".format(command, code))
     return code
 
