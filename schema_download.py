@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 """
 Copyright (c) 2011, Anthony Garcia <lagg@lavabit.com>
 
@@ -14,8 +16,24 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
-import json, os, sys, subprocess, time, logging, urllib2
-import threading, Queue
+import json, os, sys, subprocess, time, logging
+import threading
+
+# Supporting python 2 and 3
+
+try:
+    import queue
+except ImportError:
+    import Queue as queue
+
+try:
+    from urllib.request import Request as urllib_request
+    from urllib.request import urlopen
+    import urllib.error as urllib_error
+except ImportError:
+    from urllib2 import Request as urllib_request
+    from urllib2 import urlopen
+    import urllib2 as urllib_error
 
 # Configuration
 
@@ -104,23 +122,23 @@ if not os.path.exists(tracker_dir):
     run_git("commit", "-m", "Origin")
 
 def normalize_schema_data(data):
-    return data.replace("\r\n", '\n').replace('\r', '\n')
+    return data.decode("utf-8").replace("\r\n", '\n').replace('\r', '\n')
 
 def fetch_normalized(url, lm = None):
     data = None
     code = None
 
     try:
-        req = urllib2.Request(url, headers = http_headers)
+        req = urllib_request(url, headers = http_headers)
 
         if lm:
             req.add_header("If-Modified-Since", lm)
 
-        response = urllib2.urlopen(req, timeout = fetch_timeout)
+        response = urlopen(req, timeout = fetch_timeout)
         lm = response.headers.get("last-modified")
         code = response.code
         data = normalize_schema_data(response.read())
-    except urllib2.HTTPError as E:
+    except urllib_error.HTTPError as E:
         code = E.getcode()
     except Exception as E:
         log.warning("Unexpected error: " + repr(E))
@@ -131,7 +149,7 @@ def fetch_normalized(url, lm = None):
 
 class download_thread(threading.Thread):
     def __init__(self, inq, outq):
-	super(download_thread, self).__init__()
+        super(download_thread, self).__init__()
         self.inq = inq
         self.outq = outq
 
@@ -174,8 +192,8 @@ class download_thread(threading.Thread):
 
             self.inq.task_done()
 
-inqueue = Queue.Queue()
-outqueue = Queue.Queue()
+inqueue = queue.Queue()
+outqueue = queue.Queue()
 
 for i in range(connection_pool_size):
     t = download_thread(inqueue, outqueue)
@@ -183,7 +201,7 @@ for i in range(connection_pool_size):
     t.start()
 
 def download_schemas():
-    for app, name in games.iteritems():
+    for app, name in games.items():
         inobj = {
                 "app": app,
                 "client-url": client_schema_urls.get(app),
@@ -236,20 +254,20 @@ def download_schemas():
 
             if apidata:
                 with open(os.path.join(tracker_dir, apibasename), "wb") as out:
-                    out.write(apidata)
+                    out.write(apidata.encode("utf-8"))
                     summary["API"] = apits or "N/A"
 
             if clientdata:
                 with open(os.path.join(tracker_dir, clientbasename), "wb") as out:
-                    out.write(clientdata)
+                    out.write(clientdata.encode("utf-8"))
                     summary["Client"] = clientts or "N/A"
 
             commit_header = ", ".join(summary.keys()) or "None (wait what?)"
-            commit_body = '\n\n'.join([type + ": " + ts for type, ts in summary.iteritems()])
+            commit_body = '\n\n'.join([type + ": " + ts for type, ts in summary.items()])
 
             run_git("add", apibasename, clientbasename)
             run_git("commit", "-m", commit_header + "\n\n" + commit_body)
-        except Queue.Empty:
+        except queue.Empty:
             usedtries += 1
 
     if received != expected:
