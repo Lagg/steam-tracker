@@ -16,8 +16,24 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
-import json, os, sys, subprocess, time, logging, urllib.request, urllib.error, urllib.parse
-import threading, queue
+import json, os, sys, subprocess, time, logging
+import threading
+
+# Supporting python 2 and 3
+
+try:
+    import queue
+except ImportError:
+    import Queue as queue
+
+try:
+    from urllib.request import Request as urllib_request
+    from urllib.request import urlopen
+    import urllib.error as urllib_error
+except ImportError:
+    from urllib2 import Request as urllib_request
+    from urllib2 import urlopen
+    import urllib2 as urllib_error
 
 # Configuration
 
@@ -113,16 +129,16 @@ def fetch_normalized(url, lm = None):
     code = None
 
     try:
-        req = urllib.request.Request(url, headers = http_headers)
+        req = urllib_request(url, headers = http_headers)
 
         if lm:
             req.add_header("If-Modified-Since", lm)
 
-        response = urllib.request.urlopen(req, timeout = fetch_timeout)
+        response = urlopen(req, timeout = fetch_timeout)
         lm = response.headers.get("last-modified")
         code = response.code
         data = normalize_schema_data(response.read())
-    except urllib.error.HTTPError as E:
+    except urllib_error.HTTPError as E:
         code = E.getcode()
     except Exception as E:
         log.warning("Unexpected error: " + repr(E))
