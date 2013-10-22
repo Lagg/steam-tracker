@@ -17,14 +17,8 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
 import json, os, sys, subprocess, time, logging
-import threading
 
 # Supporting python 2 and 3
-
-try:
-    import queue
-except ImportError:
-    import Queue as queue
 
 try:
     from urllib.request import Request as urllib_request
@@ -105,7 +99,7 @@ git_env = {"GIT_DIR": tracker_git_dir, "GIT_WORKING_TREE": tracker_dir,
 def run_git(command, *args):
     # Might want to do something about this later with better logging, but right now it's just going to be spam
     code = subprocess.call([git_binary, command] + list(args), env = git_env, cwd = tracker_dir, stdout = bitbucket, stderr = bitbucket)
-    log.info("Running git {0} ({1})".format(command, code))
+    log.debug("Running git {0} ({1})".format(command, code))
     return code
 
 if not os.path.exists(tracker_dir):
@@ -147,137 +141,70 @@ def fetch_normalized(url, lm = None):
 
     return data, lm, code
 
-class download_thread(threading.Thread):
-    def __init__(self, inq, outq):
-        super(download_thread, self).__init__()
-        self.inq = inq
-        self.outq = outq
-
-    def run(self):
-        while True:
-            out = self.inq.get()
-            app = out["app"]
-
-            url = "http://api.steampowered.com/IEconItems_{0}/GetSchema/v1/?key={1}&language={2}".format(app, api_key, language)
-
-            log.info("API:{0}: Start".format(app))
-
-            clienturl = out.get("client-url")
-            content, lm, code = fetch_normalized(url, out["last-modified"]["api"])
-
-            log.info("API:{0}: End ({1})".format(app, code))
-
-            if content:
-                clienturl = json.loads(content)["result"]["items_game_url"]
-                out["client-url"] = clienturl
-                out["schema"]["api"] = content
-
-            if lm:
-                out["last-modified"]["api"] = lm
-
-            if clienturl:
-                log.info("Client:{0}: Start".format(app))
-
-                content, lm, code = fetch_normalized(clienturl, out["last-modified"]["client"])
-
-                if content:
-                    out["schema"]["client"] = content
-
-                if lm:
-                    out["last-modified"]["client"] = lm
-
-                log.info("Client:{0}: End ({1})".format(app, code))
-
-            self.outq.put(out)
-
-            self.inq.task_done()
-
-inqueue = queue.Queue()
-outqueue = queue.Queue()
-
-for i in range(connection_pool_size):
-    t = download_thread(inqueue, outqueue)
-    t.daemon = True
-    t.start()
-
 def download_schemas():
     for app, name in games.items():
-        inobj = {
-                "app": app,
-                "client-url": client_schema_urls.get(app),
-                "schema": {
-                    "api": None,
-                    "client": None,
-                    },
-                "last-modified": last_modified_store.setdefault(app, {"api": None, "client": None})
-                }
+        url = "http://api.steampowered.com/IEconItems_{0}/GetSchema/v1/?key={1}&language={2}".format(app, api_key, language)
+        lm_client_key = str(app) + "-client"
+        idealbranch = get_ideal_branch_name(name)
+        apibasename = name + " Schema"
+        clientbasename = name + " Client Schema"
+        summary = {}
 
-        inqueue.put(inobj)
+        log.info("{0}: Start".format(app))
 
-    expected = len(games)
-    received = 0
-    maxtries = 5
-    usedtries = 0
+        run_git("branch", idealbranch, "master")
+        run_git("checkout", idealbranch)
 
-    while usedtries < maxtries and received < expected:
-        try:
-            schema = outqueue.get(timeout = 10)
-            received += 1
-            usedtries = 0
+        clienturl = client_schema_urls.get(app)
+        content, lm, code = fetch_normalized(url, last_modified_store.get(app))
 
-            app = schema["app"]
-            name = games[app]
-            idealbranch = get_ideal_branch_name(name)
+        if content:
+            clienturl = json.loads(content)["result"]["items_game_url"]
+            client_schema_urls[app] = clienturl
 
-            apibasename = name + " Schema"
-            clientbasename = name + " Client Schema"
+            with open(os.path.join(tracker_dir, apibasename), "wb") as out:
+                out.write(content.encode("utf-8"))
+                summary["API"] = lm or "N/A"
+            run_git("add", apibasename)
 
-            run_git("branch", idealbranch, "master")
-            run_git("checkout", idealbranch)
+            log.info("{0}:     Wrote API schema ({1})".format(app, code))
+        else:
+            log.info("{0}:     No API schema to write ({1})".format(app, code))
 
-            summary = {}
-            clienturl = schema["client-url"]
-            apidata = schema["schema"]["api"]
-            clientdata = schema["schema"]["client"]
-            last_modified = schema["last-modified"]
-            apits = last_modified["api"]
-            clientts = last_modified["client"]
+        if lm:
+            last_modified_store[app] = lm
 
-            if apits:
-                last_modified_store[app]["api"] = apits
+        if clienturl:
+            content, lm, code = fetch_normalized(clienturl, last_modified_store.get(lm_client_key))
 
-            if clientts:
-                last_modified_store[app]["client"] = clientts
+            if lm:
+                last_modified_store[lm_client_key] = lm
 
-            if clienturl:
-                client_schema_urls[app] = clienturl
-
-            if apidata:
-                with open(os.path.join(tracker_dir, apibasename), "wb") as out:
-                    out.write(apidata.encode("utf-8"))
-                    summary["API"] = apits or "N/A"
-
-            if clientdata:
+            if content:
                 with open(os.path.join(tracker_dir, clientbasename), "wb") as out:
-                    out.write(clientdata.encode("utf-8"))
-                    summary["Client"] = clientts or "N/A"
+                    out.write(content.encode("utf-8"))
+                    summary["Client"] = lm or "N/A"
+                run_git("add", clientbasename)
 
-            commit_header = ", ".join(summary.keys()) or "None (wait what?)"
-            commit_body = '\n\n'.join([type + ": " + ts for type, ts in summary.items()])
+                log.info("{0}:     Wrote client schema ({1})".format(app, code))
+            else:
+                log.info("{0}:     No client schema to write ({1})".format(app, code))
 
-            run_git("add", apibasename, clientbasename)
-            run_git("commit", "-m", commit_header + "\n\n" + commit_body)
-        except queue.Empty:
-            usedtries += 1
+        commit_header = ", ".join(summary.keys()) or "None (wait what?)"
+        commit_body = '\n\n'.join([type + ": " + ts for type, ts in summary.items()])
 
-    if received != expected:
-        log.error("Expected {0} - Got {1} ({2}/{3} retries used)".format(expected, received, usedtries, maxtries))
+        run_git("commit", "-m", commit_header + "\n\n" + commit_body)
+
+        log.info("{0}: End".format(app))
 
 def get_ideal_branch_name(label):
     return label.replace(' ', '').lower()
 
 while True:
-    download_schemas()
+    try:
+        download_schemas()
+    except Exception as E:
+        log.error("Error downloading schemas: " + str(E))
 
     # Poosh leetle tracker tree (if push URL is set)
     if tracker_push_url:
