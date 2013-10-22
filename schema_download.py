@@ -116,7 +116,7 @@ if not os.path.exists(tracker_dir):
     run_git("commit", "-m", "Origin")
 
 def normalize_schema_data(data):
-    return data.decode("utf-8").replace("\r\n", '\n').replace('\r', '\n')
+    return data.replace("\x92", '').decode("utf-8").replace("\r\n", '\n').replace('\r', '\n')
 
 def fetch_normalized(url, lm = None):
     data = None
