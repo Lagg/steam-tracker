@@ -143,7 +143,12 @@ def fetch_normalized(url, lm = None):
 
 def download_schemas():
     for app, name in games.items():
-        url = "http://api.steampowered.com/IEconItems_{0}/GetSchema/v1/?key={1}&language={2}".format(app, api_key, language)
+	req_version = 1
+
+	if int(app) == 730: # Valve removed the v1 URL for some reason
+	    req_version = 2
+
+        url = "http://api.steampowered.com/IEconItems_{0}/GetSchema/v{3}/?key={1}&language={2}".format(app, api_key, language, req_version)
         lm_client_key = str(app) + "-client"
         idealbranch = get_ideal_branch_name(name)
         apibasename = name + " Schema"
