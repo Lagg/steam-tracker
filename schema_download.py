@@ -37,9 +37,9 @@ fetch_timeout = 5
 games = {
         620: "Portal 2",
         440: "Team Fortress 2",
-        520: "Team Fortress 2 Beta",
+#       520: "Team Fortress 2 Beta",
         570: "DOTA 2",
-        816: "DOTA 2 Alt 1",
+#       816: "DOTA 2 Alt 1",
         205790: "DOTA 2 Beta",
         730: "Counter Strike Global Offensive"
         }
