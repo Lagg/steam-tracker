@@ -205,7 +205,7 @@ def download_schemas():
 def get_ideal_branch_name(label):
     return label.replace(' ', '').lower()
 
-while True:
+if __name__ == "__main__":
     try:
         download_schemas()
     except Exception as E:
@@ -218,6 +218,3 @@ while True:
 
     log.debug("LM: " + str(last_modified_store))
     log.debug("URL Cache: " + str(client_schema_urls))
-
-    log.info("Sleeping for {0} second(s)".format(schema_check_interval))
-    time.sleep(schema_check_interval)
