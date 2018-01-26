@@ -99,7 +99,7 @@ git_env = {"GIT_DIR": tracker_git_dir, "GIT_WORKING_TREE": tracker_dir,
 def run_git(command, *args):
     # Might want to do something about this later with better logging, but right now it's just going to be spam
     code = subprocess.call([git_binary, command] + list(args), env = git_env, cwd = tracker_dir, stdout = bitbucket, stderr = bitbucket)
-    log.debug("Running git {0} ({1})".format(command, code))
+    log.debug("Running git {0} {2} ({1})".format(command, code, " ".join(list(args))))
     return code
 
 if not os.path.exists(tracker_dir):
@@ -159,6 +159,7 @@ def download_schemas():
 
         run_git("branch", idealbranch, "master")
         run_git("checkout", idealbranch)
+        run_git("reset", "--hard")
 
         clienturl = client_schema_urls.get(app)
         content, lm, code = fetch_normalized(url, last_modified_store.get(app))
